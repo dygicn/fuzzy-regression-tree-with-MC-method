@@ -1,0 +1,269 @@
+######  L3_left 
+# calculate L3_left_X3 
+columns = c("y_l","y_c","y_u") 
+fuzzy_y = data.frame(matrix(nrow = nrow(L3_left_X2_data), ncol = 3)) 
+colnames(fuzzy_y) = columns
+
+fp=0.01 # Fuzzification parameter of Y 
+
+# Fuzzification of dependent variable Y 
+for(i in 1:nrow(L3_left_X2_data)){
+  fuzzy_y[i,1] <- (L3_left_X2_data$Y[i]-fp)
+  fuzzy_y[i,2]<- (L3_left_X2_data$Y[i])
+  fuzzy_y[i,3] <- (L3_left_X2_data$Y[i]+fp)
+}
+
+split_criteria_calculation(L3_left_X2_data)
+
+
+L3_left_X2_data$Y_bin = (cut_number(L3_left_X2_data$Y, 3))
+list_Y_levels <- list()
+list_Y_levels <-  levels(L3_left_X2_data$Y_bin)
+
+L3_left_X2_data$X_bin <- cut_number(L3_left_X2_data$X_4, 3)
+list_X_levels <- list()
+list_X_levels <- levels(L3_left_X2_data$X_bin)
+
+table(L3_left_X2_data$X_bin, L3_left_X2_data$Y_bin) 
+
+
+df_11 <- list()
+df_12 <- list()
+df_13 <- list()
+df_21 <- list()
+df_22 <- list()
+df_23 <- list()
+df_31 <- list()
+df_32 <- list()
+df_33 <- list()
+# Combine data frames into a list
+
+# create data frames for each cell of the table 
+for (i in 1:nrow(L3_left_X2_data)){
+  if (list_X_levels[1] == L3_left_X2_data$X_bin[i]  &  list_Y_levels[1] == L3_left_X2_data$Y_bin[i]){
+    df_11[[i]] <- i
+  }}
+x <- (1:length(df_11))[!sapply(df_11,is.null)]
+df_11_ <- L3_left_X2_data[x,]
+
+for (i in 1:nrow(L3_left_X2_data)){
+  if (list_X_levels[1] == L3_left_X2_data$X_bin[i]  &  list_Y_levels[2] == L3_left_X2_data$Y_bin[i]){
+    df_12[[i]] <- i
+  }}
+x <- (1:length(df_12))[!sapply(df_12,is.null)]
+df_12_ <- L3_left_X2_data[x,]
+
+for (i in 1:nrow(L3_left_X2_data)){
+  if (list_X_levels[1] == L3_left_X2_data$X_bin[i]  &  list_Y_levels[3] == L3_left_X2_data$Y_bin[i]){
+    df_13[[i]] <- i
+  }}
+x <- (1:length(df_13))[!sapply(df_13,is.null)]
+df_13_ <- L3_left_X2_data[x,]
+
+for (i in 1:nrow(L3_left_X2_data)){
+  if (list_X_levels[2] == L3_left_X2_data$X_bin[i]  &  list_Y_levels[1] == L3_left_X2_data$Y_bin[i]){
+    df_21[[i]] <- i
+  }}
+x <- (1:length(df_21))[!sapply(df_21,is.null)]
+df_21_ <- L3_left_X2_data[x,]
+
+for (i in 1:nrow(L3_left_X2_data)){
+  if (list_X_levels[2] == L3_left_X2_data$X_bin[i]  &  list_Y_levels[2] == L3_left_X2_data$Y_bin[i]){
+    df_22[[i]] <- i
+  }}
+x <- (1:length(df_22))[!sapply(df_22,is.null)]
+df_22_ <- L3_left_X2_data[x,]
+
+for (i in 1:nrow(L3_left_X2_data)){
+  if (list_X_levels[2] == L3_left_X2_data$X_bin[i]  &  list_Y_levels[3] == L3_left_X2_data$Y_bin[i]){
+    df_23[[i]] <- i
+  }}
+x <- (1:length(df_23))[!sapply(df_23,is.null)]
+df_23_ <- L3_left_X2_data[x,]
+
+for (i in 1:nrow(L3_left_X2_data)){
+  if (list_X_levels[3] == L3_left_X2_data$X_bin[i]  &  list_Y_levels[1] == L3_left_X2_data$Y_bin[i]){
+    df_31[[i]] <- i
+  }}
+x <- (1:length(df_31))[!sapply(df_31,is.null)]
+df_31_ <- L3_left_X2_data[x,]
+
+for (i in 1:nrow(L3_left_X2_data)){
+  if (list_X_levels[3] == L3_left_X2_data$X_bin[i]  &  list_Y_levels[2] == L3_left_X2_data$Y_bin[i]){
+    df_32[[i]] <- i
+  }}
+x <- (1:length(df_32))[!sapply(df_32,is.null)]
+df_32_ <- L3_left_X2_data[x,]
+
+for (i in 1:nrow(L3_left_X2_data)){
+  if (list_X_levels[3] == L3_left_X2_data$X_bin[i]  &  list_Y_levels[3] == L3_left_X2_data$Y_bin[i]){
+    df_33[[i]] <- i
+  }}
+x <- (1:length(df_33))[!sapply(df_33,is.null)]
+df_33_ <- L3_left_X2_data[x,]
+
+
+# DEN <- table(data$Y_bin, data$X_bin)
+
+# calculate pearson correlation with first split criteria and dependent variables of each data frames
+
+correlation_11 <- cor(df_11_$X_4, df_11_$Y, method = 'pearson')
+correlation_12 <- cor(df_12_$X_4, df_12_$Y, method = 'pearson')
+correlation_13 <- cor(df_13_$X_4, df_13_$Y, method = 'pearson')
+correlation_21 <- cor(df_21_$X_4, df_21_$Y, method = 'pearson')
+correlation_22 <- cor(df_22_$X_4, df_22_$Y, method = 'pearson')
+correlation_23 <- cor(df_23_$X_4, df_23_$Y, method = 'pearson')
+correlation_31 <- cor(df_31_$X_4, df_31_$Y, method = 'pearson')
+correlation_32 <- cor(df_32_$X_4, df_32_$Y, method = 'pearson')
+correlation_33 <- cor(df_33_$X_4, df_33_$Y, method = 'pearson')
+
+correlation_11 <- ifelse(is.na(correlation_11) | correlation_11 == 1, 0, correlation_11)
+correlation_12 <- ifelse(is.na(correlation_12) | correlation_12 == 1, 0, correlation_12)
+correlation_13 <- ifelse(is.na(correlation_13) | correlation_13 == 1, 0, correlation_13)
+correlation_21 <- ifelse(is.na(correlation_21) | correlation_21 == 1, 0, correlation_21)
+correlation_22 <- ifelse(is.na(correlation_22) | correlation_22 == 1, 0, correlation_22)
+correlation_23 <- ifelse(is.na(correlation_23) | correlation_23 == 1, 0, correlation_23)
+correlation_31 <- ifelse(is.na(correlation_31) | correlation_31 == 1, 0, correlation_31)
+correlation_32 <- ifelse(is.na(correlation_32) | correlation_32 == 1, 0, correlation_32)
+correlation_33 <- ifelse(is.na(correlation_33) | correlation_33 == 1, 0, correlation_33)
+
+
+
+int_11 <- fuzzy_cor(correlation_11, nrow(df_11_))
+int_12 <- fuzzy_cor(correlation_12, nrow(df_12_))
+int_13 <- fuzzy_cor(correlation_13, nrow(df_13_))
+int_21 <- fuzzy_cor(correlation_21, nrow(df_21_))
+int_22 <- fuzzy_cor(correlation_22, nrow(df_22_))
+int_23 <- fuzzy_cor(correlation_23, nrow(df_23_))
+int_31 <- fuzzy_cor(correlation_31, nrow(df_31_))
+int_32 <- fuzzy_cor(correlation_32, nrow(df_32_))
+int_33 <- fuzzy_cor(correlation_33, nrow(df_33_))
+
+
+
+# find TFN in old version in order to calculate sum and mean values for each row of X 
+TFN_11_old_shape <- t(as.matrix(c(int_11[1],correlation_11, int_11[2]), nrow=1, ncol=3))
+TFN_12_old_shape <- t(as.matrix(c(int_12[1],correlation_12, int_12[2]), nrow=1, ncol=3))
+TFN_13_old_shape <- t(as.matrix(c(int_13[1],correlation_13, int_13[2]), nrow=1, ncol=3))
+TFN_21_old_shape <- t(as.matrix(c(int_21[1],correlation_21, int_21[2]), nrow=1, ncol=3))
+TFN_22_old_shape <- t(as.matrix(c(int_22[1],correlation_22, int_22[2]), nrow=1, ncol=3))
+TFN_23_old_shape <- t(as.matrix(c(int_23[1],correlation_23, int_23[2]), nrow=1, ncol=3))
+TFN_31_old_shape <- t(as.matrix(c(int_31[1],correlation_31, int_31[2]), nrow=1, ncol=3))
+TFN_32_old_shape <- t(as.matrix(c(int_32[1],correlation_32, int_32[2]), nrow=1, ncol=3))
+TFN_33_old_shape <- t(as.matrix(c(int_33[1],correlation_33, int_33[2]), nrow=1, ncol=3))
+
+
+corra_data_frames <- list(df_11_, df_12_, df_13_,
+                          df_21_, df_22_, df_23_,
+                          df_31_, df_32_, df_33_)
+
+for (i in 1:9){
+  # Initialize a vector to store the number of rows
+  row_counts <- numeric(length(corra_data_frames))
+  
+  # Use a for loop to count rows for each data frame
+  for (i in seq_along(corra_data_frames)) {
+    row_counts[i] <- nrow(corra_data_frames[[i]])
+  }
+  row_counts
+  
+  for (i in 1:9){
+    if (row_counts[i] == 0){
+      zero_cell <- i
+    }
+  }
+  
+  if (zero_cell==1){
+    TFN_11_old_shape =  matrix(0,1,3)
+  }else{TFN_11_old_shape <- TFN_11_old_shape}
+  
+  if (zero_cell==2){
+    TFN_12_old_shape =  matrix(0,1,3)
+  }else{TFN_12_old_shape <- TFN_12_old_shape}
+  
+  if (zero_cell==3){
+    TFN_13_old_shape =  matrix(0,1,3)
+  }else{TFN_13_old_shape <- TFN_13_old_shape}
+  
+  if (zero_cell==4){
+    TFN_21_old_shape =  matrix(0,1,3)
+  }else{TFN_21_old_shape <- TFN_21_old_shape}
+  
+  if (zero_cell==5){
+    TFN_22_old_shape =  matrix(0,1,3)
+  }else{TFN_22_old_shape <- TFN_22_old_shape}
+  
+  if (zero_cell==6){
+    TFN_23_old_shape =  matrix(0,1,3)
+  }else{TFN_23_old_shape <- TFN_23_old_shape}
+  
+  if (zero_cell==7){
+    TFN_31_old_shape =  matrix(0,1,3)
+  }else{TFN_31_old_shape <- TFN_31_old_shape}
+  
+  if (zero_cell==8){
+    TFN_32_old_shape =  matrix(0,1,3)
+  }else{TFN_32_old_shape <- TFN_32_old_shape}
+  
+  if (zero_cell==9){
+    TFN_33_old_shape =  matrix(0,1,3)
+  }else{TFN_33_old_shape <- TFN_33_old_shape}
+}
+
+
+
+
+# first row mean 
+row_1_sum <- add_TFN(TFN_11_old_shape, add_TFN(TFN_12_old_shape,TFN_13_old_shape))
+row_1_sum_mean <- mult_TFN_crisp(row_1_sum,(1/3))
+
+# second row mean 
+row_2_sum <- add_TFN(TFN_21_old_shape, add_TFN(TFN_22_old_shape,TFN_23_old_shape))
+row_2_sum_mean <- mult_TFN_crisp(row_2_sum,(1/3))
+
+# third row mean 
+row_3_sum <- add_TFN(TFN_31_old_shape, add_TFN(TFN_32_old_shape,TFN_33_old_shape))
+row_3_sum_mean <- mult_TFN_crisp(row_3_sum,(1/3))
+
+# translate these mean TFN correlation values to fuzzy format to calculate bigger value
+
+TFN_corr_anyX1 <- as.PiecewiseLinearFuzzyNumber(TriangularFuzzyNumber(row_1_sum_mean[,1],row_1_sum_mean[,2],row_1_sum_mean[,3]))
+TFN_corr_anyX2 <- as.PiecewiseLinearFuzzyNumber(TriangularFuzzyNumber(row_2_sum_mean[,1],row_2_sum_mean[,2],row_2_sum_mean[,3]))
+TFN_corr_anyX3 <- as.PiecewiseLinearFuzzyNumber(TriangularFuzzyNumber(row_3_sum_mean[,1],row_3_sum_mean[,2],row_3_sum_mean[,3]))
+
+
+
+# checking the core values of Fuzzy Correlations to rank them for choosing the strongest correlation 
+TFN_corr_anyX1 <- if((core(TFN_corr_anyX1)[1] > 0)) TFN_corr_anyX1 else TFN_corr_anyX1*(-1)
+TFN_corr_anyX2 <- if((core(TFN_corr_anyX2)[1] > 0)) TFN_corr_anyX2 else TFN_corr_anyX2*(-1)
+TFN_corr_anyX3 <- if((core(TFN_corr_anyX3)[1] > 0)) TFN_corr_anyX3 else TFN_corr_anyX3*(-1)
+
+
+
+# find the maximum fuzzy correlation coefficient
+step_1_max <- calculate_min_max_fuzzy_number((TFN_corr_anyX1),TFN_corr_anyX2)
+step_2_max <- calculate_min_max_fuzzy_number(TFN_corr_anyX2,TFN_corr_anyX3)
+
+
+
+if (as.vector(alphacut(step_1_max, 1))[1] == as.vector(alphacut(step_2_max, 1))[1])
+{print('best split is level 2 of X')}else{
+  MAX_FTN <- calculate_min_max_fuzzy_number(step_1_max,step_2_max)
+  max_cor_for_split <-  as.vector(alphacut(MAX_FTN, 1))[1]
+  if ( max_cor_for_split == as.vector(alphacut(TFN_corr_anyX1, 1))[1])
+  {print('best split is level 1 of X')}else{print('best split is level 3 of X')}
+}
+
+
+
+list_X_levels
+
+(-1.71-1.07)/2
+
+L4_left_X2_data <- L3_left_X2_data[L3_left_X2_data$X_4 < -1.39, ]
+L4_right_X2_data <- L3_left_X2_data[L3_left_X2_data$X_4 >= -1.39, ]
+
+
+mean(L4_left_X2_data$Y)
+mean(L4_right_X2_data$Y)
+
