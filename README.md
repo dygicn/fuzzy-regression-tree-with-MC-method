@@ -2,4 +2,4 @@
 # Root node calculation process should be applied first.
 # After the seperation of root node then each level of leaves are calculated based on left and right leaves.
 # Tree depth is decided to be four. 
-# Tree depth can be increased using the same left-right seperation process. 
+# Tree depth can be increased using the same left-right seperation process.  
