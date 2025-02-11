@@ -1,0 +1,584 @@
+library(dplyr)
+library(readr)
+library(FuzzyNumbers)
+library(readxl)
+library(ggplot2)
+
+
+setwd("/Users/duyguicen/Desktop/FRT_application")
+
+
+data <- read_excel("china_vegetables.xls")
+
+#changing column names and target variable
+for (i in 1:(ncol(data)-1)) {
+  names(data)[i]<- paste("X", i, sep="_")
+}
+names(data)[ncol(data)]<- paste("Y")
+
+#standardize independent variables
+data <- data %>% mutate_at(c('X_1', 'X_2', 'X_3', 'X_4'), ~(scale(.) %>% as.vector))
+
+
+# select and assing independent variables  
+independent_X <- subset(data, select = -Y) 
+
+set.seed(12345)
+data= data[sample(1:nrow(data)), ] 
+
+set.seed(12345)
+sample <- sample(c(TRUE, FALSE), nrow(data), replace=TRUE, prob=c(0.90,0.10))
+train  <- data[sample, ]
+test   <- data[!sample, ]
+
+data <- train
+
+
+# Create a fuzzy data frame with lower center and upper values in it 
+columns = c("y_l","y_c","y_u") 
+fuzzy_y = data.frame(matrix(nrow = nrow(data), ncol = 3)) 
+colnames(fuzzy_y) = columns
+
+fp=0.01 # Fuzzification parameter of Y 
+
+# Fuzzification of dependent variable Y 
+set.seed(123)
+I <- runif(1, min = 0, max = 1) 
+for(i in 1:nrow(data)){
+  fuzzy_y[i,1] <- (data$Y[i]-fp)
+  fuzzy_y[i,2]<- (data$Y[i])
+  fuzzy_y[i,3] <- (data$Y[i]+fp)
+}
+
+
+################################################################################ 
+# Calculation of fuzzy numbers with fuzzy numbers
+# Addition Function
+add_TFN <- function(TFN1, TFN2) {
+  TFN3 <- cbind((TFN1[, 1]+TFN2[, 1]) , (TFN1[, 2]+TFN2[, 2]) , (TFN1[, 3]+TFN2[, 3]))
+  TFN3
+}
+
+# Subtraction Function
+sub_TFN <- function(TFN1, TFN2) {
+  TFN3 <- cbind((TFN1[,1]-TFN2[,3]) , (TFN1[,2]-TFN2[,2]) , (TFN1[,3]-TFN2[,1]))
+  TFN3
+}
+
+# Multiplication Function
+mult_TFN <- function(TFN1, TFN2) {
+  TFN_11 <- cbind(TFN1[,1]*TFN2[,1] , TFN1[,1]*TFN2[,3] , TFN1[,3]*TFN2[,1] , TFN1[,3]*TFN2[,3])
+  tf = data.frame(matrix(nrow = nrow(TFN_11), ncol = 3)) 
+  for (i in 1:nrow(TFN_11)){
+    tf[i,1] <- min(TFN_11[i,])
+    tf[i,3] <- max(TFN_11[i,])
+  }
+  tf[,2] <- TFN1[,2]*TFN2[,2]
+  TFN3 <- tf
+}
+
+################################################################################ 
+# multiplication of fuzzy numbers with crisp numbers
+mult_TFN_crisp <- function(TFN1, a) {
+  unsorted <- cbind((TFN1[, 1]*a) , (TFN1[, 2]*a) , (TFN1[, 3]*a))
+  TFN3 <- t(apply(unsorted, 1, sort))
+}
+
+################################################################################   
+# Generating random fuzzy parameters between [0,1]
+set.seed(123)
+MC_number <- 10000
+
+random_TFNs <- matrix(runif(MC_number*(ncol(data)*3), min=0, max=1), MC_number, (ncol(data)*3))
+
+# select each three value of random_TFNs and 
+# sort them from smallest to largest for TFN lower,center,upper values
+for(i in seq(from=1, to=(ncol(data)*3), by=3)){
+  for (j in (1:MC_number)){
+    raw_a_l <- random_TFNs[j,i]
+    raw_a_c  <- random_TFNs[j,i+1]
+    raw_a_u  <- random_TFNs[j,i+2]
+    raw_a_union <- cbind(raw_a_l, raw_a_c,raw_a_u)
+    sorted_a_union <- as.matrix(sort(raw_a_union))
+    random_TFNs[j,i] <- sorted_a_union[1,1]
+    random_TFNs[j,i+1] <- sorted_a_union[2,1]
+    random_TFNs[j,i+2] <- sorted_a_union[3,1]
+  }
+}
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # 
+
+# mapping random fuzzy numbers to the intervals determined and define as model parameters
+# define interval lower and upper values for the independent variables.
+# empty_matrix_for_intervals <- matrix(nrow=ncol(data), ncol=2)
+
+interval_values <- cbind(c(-10,-10,-10,-10,-10),c(10,10,10,10,10)) # insert the intervals for each parameter
+random_TFNs_from_intervals <-  matrix(nrow=MC_number, ncol=ncol(data)*3)
+
+
+for (k in 1:nrow(interval_values)){
+  for (i in 1:nrow(random_TFNs)){
+    a_l <- random_TFNs[i,(2*k+(k-2))]
+    a_c <- random_TFNs[i,((2*k+(k-2))+1)]
+    a_u <- random_TFNs[i,((2*k+(k-2))+2)]
+    
+    a_lr <- interval_values[k,1] + (interval_values[k,2]-interval_values[k,1])*a_l
+    a_cr <- interval_values[k,1] + (interval_values[k,2]-interval_values[k,1])*a_c
+    a_ur <- interval_values[k,1] + (interval_values[k,2]-interval_values[k,1])*a_u
+    
+    raw_a <- cbind(a_lr, a_cr, a_ur)
+    sorted_a <- sort(raw_a)
+    last_a <- t(sorted_a)
+    
+    random_TFNs_from_intervals[i,(2*k+(k-2))] <- last_a[1,1]
+    random_TFNs_from_intervals[i,((2*k+(k-2))+1)] <- last_a[1,2]
+    random_TFNs_from_intervals[i,((2*k+(k-2))+2)] <- last_a[1,3]
+  }
+}
+
+################################################################################ 
+# calculation Errors for TFN outputs
+
+##### MSE #####
+MSE_calc <- function(actual,predicted) {
+  if (nrow(actual) != nrow(predicted)){
+    stop("Unequal number of numbers in actual and predicted!")
+  }
+  n <- nrow(actual)
+  total <- 0
+  for(i in 1:n){
+    total <- total + sum((actual[i,]-predicted[i,])^2)
+  }
+  MSE_fuzzy = total / n
+  return(MSE_fuzzy = MSE_fuzzy)
+}
+
+# MSE_calc(fuzzy_y,independent_X)
+
+##### RMSE #####
+RMSE_calc <- function(actual,predicted) {
+  if (nrow(actual) != nrow(predicted)){
+    stop("Unequal number of numbers in actual and predicted!")
+  }
+  n <- nrow(actual)
+  total <- 0
+  for(i in 1:n){
+    total <- total + ((sum((actual[i,]-predicted[i,])^2) / 3)^(1 / 2))
+  }
+  RMSE_fuzzy = total / n
+  return(RMSE_fuzzy = RMSE_fuzzy)
+}
+
+##### MAE #####
+MAE_calc <- function(actual,predicted) {
+  if (nrow(actual) != nrow(predicted)){
+    stop("Unequal number of numbers in actual and predicted!")
+  }
+  n <- nrow(actual)
+  total <- 0
+  for(i in 1:n){
+    total <- total + sum(abs(actual[i,]-predicted[i,]))
+    MAE_fuzzy <- total / n
+  }
+  return(MAE_fuzzy = MAE_fuzzy)
+}
+
+# calculate fuzzy output function and the errors (general error) for given each data set (X=3)
+
+fuzzy_output_calculation <- function(X){
+  er_MAE <- list()
+  er_MSE <- list()
+  er_RMSE <- list()
+  
+  for (i in 1:MC_number){
+    my_parameter_list<-list()
+    my_parameter_list <- random_TFNs_from_intervals[i,]
+    sys <- matrix(unlist(my_parameter_list), ncol=3, byrow=TRUE)
+    
+    term0 <- matrix(sys[1,], nrow = 1, byrow = TRUE)
+    term1 <- matrix(sys[2,], nrow = 1, byrow = TRUE)
+    term2 <- matrix(sys[3,], nrow = 1, byrow = TRUE)
+    term3 <- matrix(sys[4,], nrow = 1, byrow = TRUE)
+    
+    n <- nrow(data)
+    Pred_Y <- matrix(0, nrow = n, ncol = 3)
+    
+    # Linear combination
+    term_1 <- mult_TFN_crisp(term1, data[,1])
+    term_2 <- mult_TFN_crisp(term2, data[,2])
+    term_3 <- mult_TFN_crisp(term3, data[,3])
+    sum_terms <- add_TFN(term0, add_TFN(term_1, add_TFN(term_2, term_3)))
+    Pred_Y <- sum_terms
+    
+    # calculate errors 
+    er_MAE[i] <- MAE_calc(fuzzy_y,Pred_Y)
+    er_MSE[i] <- MSE_calc(fuzzy_y,Pred_Y)
+    er_RMSE[i] <-RMSE_calc(fuzzy_y, Pred_Y)
+  }
+  
+  
+  MSE_error_index <- which.min(er_MSE)
+  MSE_error <- er_MSE[MSE_error_index]
+  print(paste("MSE = ",MSE_error))
+  
+  MAE_error_index <- which.min(er_MAE)
+  MAE_error <- er_MAE[MSE_error_index]
+  print(paste("MAE = ",MAE_error))
+  
+  RMSE_error_index <- which.min(er_RMSE)
+  RMSE_error <- er_RMSE[RMSE_error_index]
+  print(paste("RMSE = ",RMSE_error))
+}  
+
+fuzzy_output_calculation(data) # root note first calculation
+
+
+split_criteria_calculation <- function(X){
+  var_MSE_back <- list()
+  for (j in 1:(ncol(X)-1)){
+    er_MSE_back <- list()
+    for (i in 1:nrow(random_TFNs_from_intervals)){
+      # used_TFN_elimination <- random_TFNs_from_intervals[, -c(((3*j)+1):((3*j)+3))]
+      # eliminated_TFN <- used_TFN_elimination[i,]
+      my_parameter_list <- random_TFNs_from_intervals[i,]  
+      sys <- matrix(unlist(my_parameter_list), ncol=3, byrow=TRUE)
+      
+      sys[(j+1),] <- 0 
+      
+      term0 <- matrix(sys[1,], nrow = 1, byrow = TRUE)
+      term1 <- matrix(sys[2,], nrow = 1, byrow = TRUE)
+      term2 <- matrix(sys[3,], nrow = 1, byrow = TRUE)
+      term3 <- matrix(sys[4,], nrow = 1, byrow = TRUE)
+      term4 <- matrix(sys[5,], nrow = 1, byrow = TRUE)
+      
+      n <- nrow(X)
+      Pred_Y <- matrix(0, nrow = n, ncol = 3)
+      
+      # Linear combination
+      term_1 <- mult_TFN_crisp(term1, X[,1])
+      term_2 <- mult_TFN_crisp(term2, X[,2])
+      term_3 <- mult_TFN_crisp(term3, X[,3])
+      term_4 <- mult_TFN_crisp(term4, X[,4])
+      
+      
+      sum_terms <- add_TFN(term0, add_TFN(term_1, add_TFN(term_2, add_TFN(term_3, term4))))
+      Pred_Y <- sum_terms
+      
+      er_MSE_back[i] <- MSE_calc(fuzzy_y,Pred_Y)
+    }
+    
+    b <- which.min(er_MSE_back) 
+    var_MSE_back[j] = er_MSE_back[b]
+    
+  }
+  first_split_index <- which.max(var_MSE_back) 
+  print(paste("split variable X_",first_split_index))
+}
+
+
+split_criteria_calculation(data) # decided X2 --> as first splitting criteria
+
+data$Y_bin = cut_number(data$Y, 3)
+list_Y_levels <- list()
+list_Y_levels <-  levels(data$Y_bin)
+table(data$Y_bin)
+
+data$X_bin <- cut_number(data$X_4, 3)
+list_X_levels <- list()
+list_X_levels <- levels(data$X_bin)
+table(data$X_bin)
+
+table(data$X_bin, data$Y_bin) # X levels are on rows
+
+
+df_11 <- list()
+df_12 <- list()
+df_13 <- list()
+df_21 <- list()
+df_22 <- list()
+df_23 <- list()
+df_31 <- list()
+df_32 <- list()
+df_33 <- list()
+# Combine data frames into a list
+
+# create data frames for each cell of the table 
+for (i in 1:nrow(data)){
+  if (list_X_levels[1] == data$X_bin[i]  &  list_Y_levels[1] == data$Y_bin[i]){
+    df_11[[i]] <- i
+  }}
+x <- (1:length(df_11))[!sapply(df_11,is.null)]
+df_11_ <- data[x,]
+
+for (i in 1:nrow(data)){
+  if (list_X_levels[1] == data$X_bin[i]  &  list_Y_levels[2] == data$Y_bin[i]){
+    df_12[[i]] <- i
+  }}
+x <- (1:length(df_12))[!sapply(df_12,is.null)]
+df_12_ <- data[x,]
+
+for (i in 1:nrow(data)){
+  if (list_X_levels[1] == data$X_bin[i]  &  list_Y_levels[3] == data$Y_bin[i]){
+    df_13[[i]] <- i
+  }}
+x <- (1:length(df_13))[!sapply(df_13,is.null)]
+df_13_ <- data[x,]
+
+for (i in 1:nrow(data)){
+  if (list_X_levels[2] == data$X_bin[i]  &  list_Y_levels[1] == data$Y_bin[i]){
+    df_21[[i]] <- i
+  }}
+x <- (1:length(df_21))[!sapply(df_21,is.null)]
+df_21_ <- data[x,]
+
+for (i in 1:nrow(data)){
+  if (list_X_levels[2] == data$X_bin[i]  &  list_Y_levels[2] == data$Y_bin[i]){
+    df_22[[i]] <- i
+  }}
+x <- (1:length(df_22))[!sapply(df_22,is.null)]
+df_22_ <- data[x,]
+
+for (i in 1:nrow(data)){
+  if (list_X_levels[2] == data$X_bin[i]  &  list_Y_levels[3] == data$Y_bin[i]){
+    df_23[[i]] <- i
+  }}
+x <- (1:length(df_23))[!sapply(df_23,is.null)]
+df_23_ <- data[x,]
+
+for (i in 1:nrow(data)){
+  if (list_X_levels[3] == data$X_bin[i]  &  list_Y_levels[1] == data$Y_bin[i]){
+    df_31[[i]] <- i
+  }}
+x <- (1:length(df_31))[!sapply(df_31,is.null)]
+df_31_ <- data[x,]
+
+for (i in 1:nrow(data)){
+  if (list_X_levels[3] == data$X_bin[i]  &  list_Y_levels[2] == data$Y_bin[i]){
+    df_32[[i]] <- i
+  }}
+x <- (1:length(df_32))[!sapply(df_32,is.null)]
+df_32_ <- data[x,]
+
+for (i in 1:nrow(data)){
+  if (list_X_levels[3] == data$X_bin[i]  &  list_Y_levels[3] == data$Y_bin[i]){
+    df_33[[i]] <- i
+  }}
+x <- (1:length(df_33))[!sapply(df_33,is.null)]
+df_33_ <- data[x,]
+
+
+# DEN <- table(data$Y_bin, data$X_bin)
+
+# calculate pearson correlation with first split criteria and dependent variables of each data frames
+
+correlation_11 <- cor(df_11_$X_4, df_11_$Y, method = 'pearson')
+correlation_12 <- cor(df_12_$X_4, df_12_$Y, method = 'pearson')
+correlation_13 <- cor(df_13_$X_4, df_13_$Y, method = 'pearson')
+correlation_21 <- cor(df_21_$X_4, df_21_$Y, method = 'pearson')
+correlation_22 <- cor(df_22_$X_4, df_22_$Y, method = 'pearson')
+correlation_23 <- cor(df_23_$X_4, df_23_$Y, method = 'pearson')
+correlation_31 <- cor(df_31_$X_4, df_31_$Y, method = 'pearson')
+correlation_32 <- cor(df_32_$X_4, df_32_$Y, method = 'pearson')
+correlation_33 <- cor(df_33_$X_4, df_33_$Y, method = 'pearson')
+
+correlation_11 <- ifelse(is.na(correlation_11) | correlation_11 == 1, 0, correlation_11)
+correlation_12 <- ifelse(is.na(correlation_12) | correlation_12 == 1, 0, correlation_12)
+correlation_13 <- ifelse(is.na(correlation_13) | correlation_13 == 1, 0, correlation_13)
+correlation_21 <- ifelse(is.na(correlation_21) | correlation_21 == 1, 0, correlation_21)
+correlation_22 <- ifelse(is.na(correlation_22) | correlation_22 == 1, 0, correlation_22)
+correlation_23 <- ifelse(is.na(correlation_23) | correlation_23 == 1, 0, correlation_23)
+correlation_31 <- ifelse(is.na(correlation_31) | correlation_31 == 1, 0, correlation_31)
+correlation_32 <- ifelse(is.na(correlation_32) | correlation_32 == 1, 0, correlation_32)
+correlation_33 <- ifelse(is.na(correlation_33) | correlation_33 == 1, 0, correlation_33)
+
+
+
+
+fuzzy_cor <- function(R,n){
+  z_beta_div_2 <- qnorm(p=.001/2, lower.tail=FALSE)
+  s <- (2*z_beta_div_2)/sqrt(n) # n-3 
+  ro_left <- ((1+R)-(1-R)*exp(s))/((1+R)+(1-R)*exp(s))
+  ro_right <- ((1+R)-(1-R)*exp(-s))/((1+R)+(1-R)*exp(-s))
+  return(c(ro_left, ro_right))
+}
+
+
+int_11 <- fuzzy_cor(correlation_11, nrow(df_11_))
+int_12 <- fuzzy_cor(correlation_12, nrow(df_12_))
+int_13 <- fuzzy_cor(correlation_13, nrow(df_13_))
+int_21 <- fuzzy_cor(correlation_21, nrow(df_21_))
+int_22 <- fuzzy_cor(correlation_22, nrow(df_22_))
+int_23 <- fuzzy_cor(correlation_23, nrow(df_23_))
+int_31 <- fuzzy_cor(correlation_31, nrow(df_31_))
+int_32 <- fuzzy_cor(correlation_32, nrow(df_32_))
+int_33 <- fuzzy_cor(correlation_33, nrow(df_33_))
+
+
+
+# find TFN in old version in order to calculate sum and mean values for each row of X 
+TFN_11_old_shape <- t(as.matrix(c(int_11[1],correlation_11, int_11[2]), nrow=1, ncol=3))
+TFN_12_old_shape <- t(as.matrix(c(int_12[1],correlation_12, int_12[2]), nrow=1, ncol=3))
+TFN_13_old_shape <- t(as.matrix(c(int_13[1],correlation_13, int_13[2]), nrow=1, ncol=3))
+TFN_21_old_shape <- t(as.matrix(c(int_21[1],correlation_21, int_21[2]), nrow=1, ncol=3))
+TFN_22_old_shape <- t(as.matrix(c(int_22[1],correlation_22, int_22[2]), nrow=1, ncol=3))
+TFN_23_old_shape <- t(as.matrix(c(int_23[1],correlation_23, int_23[2]), nrow=1, ncol=3))
+TFN_31_old_shape <- t(as.matrix(c(int_31[1],correlation_31, int_31[2]), nrow=1, ncol=3))
+TFN_32_old_shape <- t(as.matrix(c(int_32[1],correlation_32, int_32[2]), nrow=1, ncol=3))
+TFN_33_old_shape <- t(as.matrix(c(int_33[1],correlation_33, int_33[2]), nrow=1, ncol=3))
+
+
+corra_data_frames <- list(df_11_, df_12_, df_13_,
+                          df_21_, df_22_, df_23_,
+                          df_31_, df_32_, df_33_)
+
+for (i in 1:9){
+  # Initialize a vector to store the number of rows
+  row_counts <- numeric(length(corra_data_frames))
+  
+  # Use a for loop to count rows for each data frame
+  for (i in seq_along(corra_data_frames)) {
+    row_counts[i] <- nrow(corra_data_frames[[i]])
+  }
+  row_counts
+  
+  for (i in 1:9){
+    if (row_counts[i] == 0){
+      zero_cell <- i
+    }
+  }
+  
+  if (zero_cell==1){
+    TFN_11_old_shape =  matrix(0,1,3)
+  }else{TFN_11_old_shape <- TFN_11_old_shape}
+  
+  if (zero_cell==2){
+    TFN_12_old_shape =  matrix(0,1,3)
+  }else{TFN_12_old_shape <- TFN_12_old_shape}
+  
+  if (zero_cell==3){
+    TFN_13_old_shape =  matrix(0,1,3)
+  }else{TFN_13_old_shape <- TFN_13_old_shape}
+  
+  if (zero_cell==4){
+    TFN_21_old_shape =  matrix(0,1,3)
+  }else{TFN_21_old_shape <- TFN_21_old_shape}
+  
+  if (zero_cell==5){
+    TFN_22_old_shape =  matrix(0,1,3)
+  }else{TFN_22_old_shape <- TFN_22_old_shape}
+  
+  if (zero_cell==6){
+    TFN_23_old_shape =  matrix(0,1,3)
+  }else{TFN_23_old_shape <- TFN_23_old_shape}
+  
+  if (zero_cell==7){
+    TFN_31_old_shape =  matrix(0,1,3)
+  }else{TFN_31_old_shape <- TFN_31_old_shape}
+  
+  if (zero_cell==8){
+    TFN_32_old_shape =  matrix(0,1,3)
+  }else{TFN_32_old_shape <- TFN_32_old_shape}
+  
+  if (zero_cell==9){
+    TFN_33_old_shape =  matrix(0,1,3)
+  }else{TFN_33_old_shape <- TFN_33_old_shape}
+}
+
+
+
+
+# first row mean 
+row_1_sum <- add_TFN(TFN_11_old_shape, add_TFN(TFN_12_old_shape,TFN_13_old_shape))
+row_1_sum_mean <- mult_TFN_crisp(row_1_sum,(1/3))
+
+# second row mean 
+row_2_sum <- add_TFN(TFN_21_old_shape, add_TFN(TFN_22_old_shape,TFN_23_old_shape))
+row_2_sum_mean <- mult_TFN_crisp(row_2_sum,(1/3))
+
+# third row mean 
+row_3_sum <- add_TFN(TFN_31_old_shape, add_TFN(TFN_32_old_shape,TFN_33_old_shape))
+row_3_sum_mean <- mult_TFN_crisp(row_3_sum,(1/3))
+
+# translate these mean TFN correlation values to fuzzy format to calculate bigger value
+
+TFN_corr_anyX1 <- as.PiecewiseLinearFuzzyNumber(TriangularFuzzyNumber(row_1_sum_mean[,1],row_1_sum_mean[,2],row_1_sum_mean[,3]))
+TFN_corr_anyX2 <- as.PiecewiseLinearFuzzyNumber(TriangularFuzzyNumber(row_2_sum_mean[,1],row_2_sum_mean[,2],row_2_sum_mean[,3]))
+TFN_corr_anyX3 <- as.PiecewiseLinearFuzzyNumber(TriangularFuzzyNumber(row_3_sum_mean[,1],row_3_sum_mean[,2],row_3_sum_mean[,3]))
+
+
+# calculate the maximum value of the correlations with the independent value X and dependent Y
+calculate_min_max_fuzzy_number <- function(x,y){       
+  pe <- possibilityExceedance(x,y)
+  ne <- necessityExceedance(x,y)
+  pse <- possibilityStrictExceedance(x,y)
+  nce <- necessityStrictExceedance(x,y)
+  exceded_index <- pe+ne+pse+nce
+  
+  # calculation of undervalue indexes
+  puv <- possibilityUndervaluation(x,y)
+  nuv <- necessityUndervaluation(x,y)
+  psuv <- possibilityStrictUndervaluation(x,y)
+  nsuv <- necessityStrictUndervaluation(x,y)
+  undervalue_index <- puv+nuv+psuv+nsuv 
+  
+  if (exceded_index > undervalue_index)
+    bigger_value <- x 
+  else 
+    bigger_value <- y 
+  print(bigger_value)
+} 
+
+# checking the core values of Fuzzy Correlations to rank them for choosing the strongest correlation 
+TFN_corr_anyX1 <- if((core(TFN_corr_anyX1)[1] > 0)) TFN_corr_anyX1 else TFN_corr_anyX1*(-1)
+TFN_corr_anyX2 <- if((core(TFN_corr_anyX2)[1] > 0)) TFN_corr_anyX2 else TFN_corr_anyX2*(-1)
+TFN_corr_anyX3 <- if((core(TFN_corr_anyX3)[1] > 0)) TFN_corr_anyX3 else TFN_corr_anyX3*(-1)
+
+
+
+# find the maximum fuzzy correlation coefficient
+step_1_max <- calculate_min_max_fuzzy_number((TFN_corr_anyX1),TFN_corr_anyX2)
+step_2_max <- calculate_min_max_fuzzy_number(TFN_corr_anyX2,TFN_corr_anyX3)
+
+
+
+if (as.vector(alphacut(step_1_max, 1))[1] == as.vector(alphacut(step_2_max, 1))[1])
+{print('best split is level 2 of X')}else{
+  MAX_FTN <- calculate_min_max_fuzzy_number(step_1_max,step_2_max)
+  max_cor_for_split <-  as.vector(alphacut(MAX_FTN, 1))[1]
+  if ( max_cor_for_split == as.vector(alphacut(TFN_corr_anyX1, 1))[1])
+  {print('best split is level 1 of X')}else{print('best split is level 3 of X')}
+}
+
+
+
+list_X_levels
+
+interval_string <- "-1.68,-0.603"
+
+# Split the string into lower and upper limits
+limits <- as.numeric(unlist(strsplit(interval_string, ",\\s*")))
+
+# Calculate the center point
+center_point <- mean(limits)
+
+# Print the result
+cat("The center point of the interval is:", center_point, "\n")
+
+(-1.68-0.603)/2
+
+L1_left_X2_data <- data[data$X_4 < -1.1415, ]
+L1_right_X2_data <- data[data$X_4 >= -1.1415, ]
+
+
+
+L1_left_X2_data <- L1_left_X2_data[, -(c(6:7))]
+L1_right_X2_data <- L1_right_X2_data[, -(c(6:7))]
+
+stopping_criteria_check_1 <- function(X,Y){
+  if (nrow(X) < ceiling(0.10*nrow(data)) | nrow(Y) < ceiling(0.10*nrow(data)))
+    print ("decision tree stopped, one of the leaves has smaller case number than %5 of total data") else
+      print("continue generating tree")
+}
+
+stopping_criteria_check_1(L1_left_X2_data,L1_right_X2_data)
+
+mean(L1_left_X2_data$Y)
