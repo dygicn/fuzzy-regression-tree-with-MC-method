@@ -1,0 +1,1075 @@
+library(dplyr)
+library(readr)
+library(FuzzyNumbers)
+library(readxl)
+library(ggplot2)
+
+
+setwd("/Users/duyguicen/Desktop/sim_data_new/piecewise_outlier_data")
+
+
+data <- read_excel("data_piecewise_n-500_out-0.00.xlsx")
+
+# Min-Max Scaling (Normalize to range [0, 1])
+#normalize_min_max <- function(data) {
+#  data_normalized <- as.data.frame(lapply(data, function(x) (x - min(x)) / (max(x) - min(x))))
+#  return(data_normalized)
+#}
+
+# Example usage
+#data <- normalize_min_max(data)
+
+
+
+################################################################################ 
+# Calculation of fuzzy numbers with fuzzy numbers
+# Addition Function
+add_TFN <- function(TFN1, TFN2) {
+  TFN3 <- cbind((TFN1[, 1]+TFN2[, 1]) , (TFN1[, 2]+TFN2[, 2]) , (TFN1[, 3]+TFN2[, 3]))
+  return(TFN3)
+}
+
+# Subtraction Function
+sub_TFN <- function(TFN1, TFN2) {
+  TFN3 <- cbind((TFN1[,1]-TFN2[,3]) , (TFN1[,2]-TFN2[,2]) , (TFN1[,3]-TFN2[,1]))
+  return(TFN3)
+}
+
+# Multiplication Function (handles negative TFNs properly)
+mult_TFN <- function(TFN1, TFN2) {
+  # TFN1 and TFN2: matrices with 3 columns (lower, center, upper)
+  n <- nrow(TFN1)
+  TFN3 <- matrix(nrow = n, ncol = 3)
+  
+  for (i in 1:n) {
+    a1 <- TFN1[i, 1]; b1 <- TFN1[i, 2]; c1 <- TFN1[i, 3]
+    a2 <- TFN2[i, 1]; b2 <- TFN2[i, 2]; c2 <- TFN2[i, 3]
+    
+    # Consider all corner combinations (handles negative values)
+    candidates <- c(a1 * a2, a1 * c2, c1 * a2, c1 * c2)
+    
+    TFN3[i, 1] <- min(candidates)        # lower
+    TFN3[i, 2] <- b1 * b2                # center
+    TFN3[i, 3] <- max(candidates)        # upper
+  }
+  
+  colnames(TFN3) <- c("lower", "center", "upper")
+  return(TFN3)
+}
+
+################################################################################ 
+# multiplication of fuzzy numbers with crisp numbers
+# Multiplication of Triangular Fuzzy Numbers (TFNs) by a Crisp Scalar
+mult_TFN_crisp <- function(TFN1, a) {
+  # Multiply each part (lower, center, upper) of the TFN by 'a'
+  unsorted <- cbind(TFN1[, 1] * a, TFN1[, 2] * a, TFN1[, 3] * a)
+  
+  # Ensure the result is a proper TFN (sorted increasing)
+  TFN3 <- t(apply(unsorted, 1, sort))
+  colnames(TFN3) <- c("lower", "center", "upper")
+  return(TFN3)
+}
+
+
+################################################################################ 
+# calculation of them mean value of fuzzy matrix (for the leaf nodes mean calculation)
+# is going to be used when assigning the predicted value at a leaf node of the tree.
+mean_TFN_leaf <- function(fuzzy_matrix) {
+  n <- nrow(fuzzy_matrix)
+  sum_fuzzy <- fuzzy_matrix[1, , drop = FALSE]
+  if (n > 1) {
+    for (i in 2:n) {
+      sum_fuzzy <- add_TFN(sum_fuzzy, fuzzy_matrix[i, , drop = FALSE])
+    }
+  }
+  mean_fuzzy <- mult_TFN_crisp(sum_fuzzy, 1/n)
+  return(mean_fuzzy)
+}
+
+# ----------------------------
+# FULL FUZZY DECISION TREE PIPELINE
+# ----------------------------
+
+# --- Step 1: Rename columns ---
+for (i in 1:4) {
+  colnames(data)[i] <- paste0("X_", i)
+}
+colnames(data)[5] <- "Y"
+
+# --- Step 2: Standardize independent variables ---
+#data[, 1:4] <- scale(data[, 1:4])
+
+# --- Step 3: Fuzzify the dependent variable ---
+fp <- 2.5
+fuzzy_y <- data.frame(
+  y_l = data$Y - fp,
+  y_c = data$Y,
+  y_u = data$Y + fp
+)
+
+
+# --- Step 4: Generate fuzzy parameters with Monte Carlo ---
+set.seed(123)
+MC_number <- 1000
+param_count <- 5  # 4 features + 1 intercept
+random_TFNs <- matrix(runif(MC_number * param_count * 3, min = 0, max = 1), MC_number, param_count * 3)
+
+# Sort each TFN triplet
+for (i in seq(1, ncol(random_TFNs), by = 3)) {
+  for (j in 1:MC_number) {
+    sorted_vals <- sort(random_TFNs[j, i:(i + 2)])
+    random_TFNs[j, i:(i + 2)] <- sorted_vals
+  }
+}
+
+
+# Step 1: Define your intervals for each parameter (intercept + features)
+# Format: matrix with rows = parameters, columns = c(min, max)
+# Example below: 5 parameters (1 intercept + 4 features)
+interval_values <- matrix(c(
+  -10,  10,   # Intercept
+  -10,  10,   # X1
+  -10,  10,   # X2
+  -10,  10,   # X3
+  -10,  10  # X4
+), byrow = TRUE, ncol = 2)
+
+# Step 2: Scale the raw Monte Carlo TFNs to the corresponding intervals
+random_TFNs_from_intervals <- matrix(nrow = MC_number, ncol = param_count * 3)
+
+for (k in 1:param_count) {
+  min_val <- interval_values[k, 1]
+  max_val <- interval_values[k, 2]
+  
+  for (i in 1:MC_number) {
+    idx <- (3 * (k - 1)) + 1
+    raw_vals <- random_TFNs[i, idx:(idx + 2)]
+    
+    # Scale to [min_val, max_val]
+    scaled_vals <- min_val + (max_val - min_val) * raw_vals
+    
+    # Ensure TFNs are sorted (increasing order)
+    random_TFNs_from_intervals[i, idx:(idx + 2)] <- sort(scaled_vals)
+  }
+}
+
+
+# --- Step 5A: Define helper function for fuzzy correlation interval ---
+#fuzzy_cor <- function(R, n) {
+#  z_beta_div_2 <- qnorm(p = .001 / 2, lower.tail = FALSE)
+#  s <- (2 * z_beta_div_2) / sqrt(n)
+#  ro_left <- ((1 + R) - (1 - R) * exp(s)) / ((1 + R) + (1 - R) * exp(s))
+#  ro_right <- ((1 + R) - (1 - R) * exp(-s)) / ((1 + R) + (1 - R) * exp(-s))
+#  return(c(ro_left, ro_right))
+#}
+
+fuzzy_variance <- function(y) {
+  # Sample size
+  n <- length(y)
+  df <- n - 1
+  
+  # Sample variance
+  var_center <- var(y)
+  
+  # 99% confidence level
+  alpha <- 0.01
+  chi2_left <- qchisq(1 - alpha / 2, df = df)
+  chi2_right <- qchisq(alpha / 2, df = df)
+  
+  # Confidence interval bounds for variance
+  lower_bound <- (df * var_center) / chi2_left
+  upper_bound <- (df * var_center) / chi2_right
+  
+  # Ensure order for TFN
+  all_vals <- sort(c(lower_bound, var_center, upper_bound))
+  
+  # Return as Triangular Fuzzy Number
+  return(TriangularFuzzyNumber(all_vals[1], all_vals[2], all_vals[3]))
+}
+
+
+
+# --- Updated fuzzy_split_level_selector including calculate_min_max_fuzzy_number helper ---
+
+# Helper function to compare two fuzzy numbers based on undervaluation (to select minimum fuzzy correlation)
+calculate_min_max_fuzzy_number <- function(x, y) {
+  # Coerce to PiecewiseLinearFuzzyNumber
+  if (!inherits(x, "PiecewiseLinearFuzzyNumber")) {
+    x <- as.PiecewiseLinearFuzzyNumber(x)
+  }
+  if (!inherits(y, "PiecewiseLinearFuzzyNumber")) {
+    y <- as.PiecewiseLinearFuzzyNumber(y)
+  }
+  
+  pe   <- possibilityExceedance(x, y)
+  ne   <- necessityExceedance(x, y)
+  pse  <- possibilityStrictExceedance(x, y)
+  nce  <- necessityStrictExceedance(x, y)
+  exceeded_index <- pe + ne + pse + nce
+  
+  puv  <- possibilityUndervaluation(x, y)
+  nuv  <- necessityUndervaluation(x, y)
+  psuv <- possibilityStrictUndervaluation(x, y)
+  nsuv <- necessityStrictUndervaluation(x, y)
+  undervalue_index <- puv + nuv + psuv + nsuv
+  
+  if (undervalue_index > exceeded_index) return(x) else return(y)
+}
+
+
+# --- Step 6: Build the fuzzy regression tree ---
+split_criteria_calculation_bestMC <- function(X, fuzzy_y, random_TFNs_from_intervals) {
+  num_features <- ncol(X)
+  num_params <- num_features + 1
+  num_MC <- nrow(random_TFNs_from_intervals)
+  n <- nrow(X)
+  
+  # Step 1: Find best MC sample (with all features)
+  FMSE_all_MC <- numeric(num_MC)
+  
+  for (i in 1:num_MC) {
+    TFN_matrix <- matrix(random_TFNs_from_intervals[i, ], ncol = 3, byrow = TRUE)
+    
+    Pred_Y <- matrix(rep(TFN_matrix[1, ], each = n), nrow = n)  # Intercept
+    
+    for (f in 1:num_features) {
+      coef_TFN <- matrix(TFN_matrix[f + 1, ], nrow = 1)
+      term <- mult_TFN_crisp(coef_TFN, X[, f])
+      Pred_Y <- add_TFN(Pred_Y, term)
+    }
+    
+    FMSE_all_MC[i] <- FMSE_calc(fuzzy_y, Pred_Y)
+  }
+  
+  best_index <- which.min(FMSE_all_MC)
+  best_TFN_matrix <- matrix(random_TFNs_from_intervals[best_index, ], ncol = 3, byrow = TRUE)
+  
+  # Step 2: Evaluate feature importance using best TFN matrix
+  FMSE_by_feature <- numeric(num_features)
+  
+  for (j in 1:num_features) {
+    test_TFN_matrix <- best_TFN_matrix
+    test_TFN_matrix[j + 1, ] <- 0  # Remove j-th feature
+    
+    Pred_Y <- matrix(rep(test_TFN_matrix[1, ], each = n), nrow = n)
+    
+    for (f in 1:num_features) {
+      coef_TFN <- matrix(test_TFN_matrix[f + 1, ], nrow = 1)
+      term <- mult_TFN_crisp(coef_TFN, X[, f])
+      Pred_Y <- add_TFN(Pred_Y, term)
+    }
+    
+    FMSE_by_feature[j] <- FMSE_calc(fuzzy_y, Pred_Y)
+  }
+  
+  split_index <- which.max(FMSE_by_feature)
+  #print(paste("Best MC index:", best_index))
+  #print(paste("Split variable: X_", split_index, sep = ""))
+  return(list(
+    split_index = split_index,
+    best_MC_index = best_index,
+    FMSE_by_feature = FMSE_by_feature
+  ))
+}
+
+
+
+best_fuzzy_bin_split <- function(X, fuzzy_y, bin_options = 2:5) {
+  best_result <- NULL
+  best_vote_score <- -Inf
+  
+  for (bins in bin_options) {
+    bin_factor <- cut_number(X, bins)
+    bin_levels <- levels(bin_factor)
+    
+    fuzzy_variance_list <- list()
+    warning_list <- list()
+    
+    # Step 1: Calculate fuzzy variance for each bin
+    for (i in seq_along(bin_levels)) {
+      bin_indices <- which(bin_factor == bin_levels[i])
+      bin_fuzzy_y <- fuzzy_y[bin_indices, , drop = FALSE]
+      
+      if (nrow(bin_fuzzy_y) < 2) {
+        warning_list[[length(warning_list) + 1]] <- paste(
+          "\u26A0️ Warning: bin", i, "has", nrow(bin_fuzzy_y), "observation(s)"
+        )
+        fuzzy_variance_list[[i]] <- TriangularFuzzyNumber(Inf, Inf, Inf)
+      } else {
+        fuzzy_variance_list[[i]] <- fuzzy_variance(bin_fuzzy_y)
+      }
+    }
+    
+    # Step 2: Pairwise comparison of fuzzy variances
+    vote_count <- rep(0, bins)
+    for (i in 1:(bins - 1)) {
+      for (j in (i + 1):bins) {
+        min_fuzzy <- calculate_min_max_fuzzy_number(
+          fuzzy_variance_list[[i]],
+          fuzzy_variance_list[[j]]
+        )
+        if (identical(min_fuzzy, fuzzy_variance_list[[i]])) {
+          vote_count[i] <- vote_count[i] + 1
+        } else {
+          vote_count[j] <- vote_count[j] + 1
+        }
+      }
+    }
+    
+    # Step 3: Keep the best scoring bin across all bin options
+    current_best_index <- which.max(vote_count)
+    current_vote_score <- max(vote_count)
+    
+    if (current_vote_score > best_vote_score) {
+      best_vote_score <- current_vote_score
+      best_bin_label <- bin_levels[current_best_index]
+      limits <- as.numeric(unlist(strsplit(best_bin_label, ",|\\(|\\)|\\[|\\]")))
+      limits <- limits[!is.na(limits)]
+      lower_bound <- min(limits)
+      
+      best_result <- list(
+        bins = bins,
+        selected_bin_index = current_best_index,
+        bin_label = best_bin_label,
+        lower_bound = lower_bound,
+        fuzzy_variance = fuzzy_variance_list[[current_best_index]],
+        warnings = warning_list
+      )
+    }
+  }
+  
+  # Print any warnings
+  if (length(best_result$warnings) > 0) {
+    cat("=== Warnings ===\n")
+    for (msg in best_result$warnings) cat(msg, "\n")
+    cat("================\n")
+  }
+  
+  return(best_result)
+}
+
+
+build_fuzzy_tree <- function(data, fuzzy_y, random_TFNs_from_intervals,
+                             depth = 1, max_depth = 4, min_samples = 10,
+                             bin_options = 2:5) {
+  
+  n <- nrow(data)
+  
+  # Stopping condition: create a leaf
+  if (depth >= max_depth || n <= min_samples) {
+    return(list(
+      is_leaf = TRUE,
+      prediction = mean_TFN_leaf(fuzzy_y),
+      n_samples = n
+    ))
+  }
+  
+  # Step 1: Choose the best feature to split
+  X <- subset(data, select = -Y)
+  split_info <- split_criteria_calculation_bestMC(X, fuzzy_y, random_TFNs_from_intervals)
+  best_var_index <- split_info$split_index
+  best_feature <- colnames(X)[best_var_index]
+  
+  # Step 2: Apply fuzzy bin logic to find best cut point
+  split_result <- best_fuzzy_bin_split(data[[best_feature]], fuzzy_y, bin_options)
+  cut_point <- split_result$lower_bound
+  split_var <- best_feature
+  
+  # Step 3: Partition the data
+  left_indices <- which(data[[split_var]] <= cut_point)
+  right_indices <- which(data[[split_var]] > cut_point)
+  
+  if (length(left_indices) == 0 || length(right_indices) == 0) {
+    return(list(
+      is_leaf = TRUE,
+      prediction = mean_TFN_leaf(fuzzy_y),
+      n_samples = n
+    ))
+  }
+  
+  # Step 4: Recursive calls
+  left_tree <- build_fuzzy_tree(data[left_indices, , drop = FALSE],
+                                fuzzy_y[left_indices, , drop = FALSE],
+                                random_TFNs_from_intervals,
+                                depth + 1, max_depth, min_samples, bin_options)
+  
+  right_tree <- build_fuzzy_tree(data[right_indices, , drop = FALSE],
+                                 fuzzy_y[right_indices, , drop = FALSE],
+                                 random_TFNs_from_intervals,
+                                 depth + 1, max_depth, min_samples, bin_options)
+  
+  # Step 5: Return the current internal node
+  return(list(
+    is_leaf = FALSE,
+    split_variable = split_var,
+    split_value = cut_point,
+    n_samples = n,
+    left = left_tree,
+    right = right_tree
+  ))
+}
+
+
+
+FMSE_calc <- function(actual, predicted) {
+  if (nrow(actual) != nrow(predicted)) stop("Unequal number of rows in actual and predicted!")
+  total <- 0
+  for (i in 1:nrow(actual)) {
+    total <- total + sum((actual[i, ] - predicted[i, ])^2)
+  }
+  return(total / nrow(actual))
+}
+
+RMSE_calc <- function(actual, predicted) {
+  if (nrow(actual) != nrow(predicted)) stop("Unequal number of rows in actual and predicted!")
+  total <- 0
+  for (i in 1:nrow(actual)) {
+    total <- total + sqrt(sum((actual[i, ] - predicted[i, ])^2) / 3)
+  }
+  return(total / nrow(actual))
+}
+
+MAE_calc <- function(actual, predicted) {
+  if (nrow(actual) != nrow(predicted)) stop("Unequal number of rows in actual and predicted!")
+  total <- 0
+  for (i in 1:nrow(actual)) {
+    total <- total + sum(abs(actual[i, ] - predicted[i, ]))
+  }
+  return(total / nrow(actual))
+}
+
+
+tree <- build_fuzzy_tree(data, fuzzy_y, random_TFNs_from_intervals, max_depth = 4, min_samples = 10)
+
+# --- Step 9: View predictions ---
+
+# Assign (x, y) positions recursively
+assign_coordinates <- function(tree, depth = 1) {
+  # internal leaf counter
+  leaf_counter <<- 0
+  
+  recurse <- function(node, depth) {
+    node$depth <- depth
+    if (node$is_leaf) {
+      leaf_counter <<- leaf_counter + 1
+      node$x <- leaf_counter
+    } else {
+      node$left <- recurse(node$left, depth + 1)
+      node$right <- recurse(node$right, depth + 1)
+      node$x <- (node$left$x + node$right$x) / 2
+    }
+    return(node)
+  }
+  
+  recurse(tree, depth)
+}
+
+
+count_leaves <- function(tree) {
+  if (tree$is_leaf) return(1)
+  return(count_leaves(tree$left) + count_leaves(tree$right))
+}
+
+
+plot_fuzzy_tree_positioned <- function(tree, scale_x = 1, dy = 0.12) {
+  y <- 1 - ((tree$depth - 1) * dy)
+  x <- tree$x * scale_x
+  
+  if (tree$is_leaf) {
+    pred <- tree$prediction
+    if (is.matrix(pred)) {
+      label <- paste0("[", round(pred[1, "lower"], 2), ", ",
+                      round(pred[1, "center"], 2), ", ",
+                      round(pred[1, "upper"], 2), "]\n(n=", tree$n_samples, ")")
+    } else {
+      label <- paste0("Leaf\nn=", tree$n_samples)
+    }
+    text(x, y, label, cex = 0.7, col = "darkgreen")
+  } else {
+    label <- paste0(tree$split_variable, " ≤ ", round(tree$split_value, 2),
+                    "\n(n = ", tree$n_samples, ")")
+    text(x, y, label, font = 2, cex = 0.8)
+    
+    x_left <- tree$left$x * scale_x
+    x_right <- tree$right$x * scale_x
+    y_next <- 1 - (tree$left$depth - 1) * dy
+    
+    segments(x, y - 0.01, x_left, y_next + 0.01)
+    segments(x, y - 0.01, x_right, y_next + 0.01)
+    
+    plot_fuzzy_tree_positioned(tree$left, scale_x, dy)
+    plot_fuzzy_tree_positioned(tree$right, scale_x, dy)
+  }
+}
+
+tree_pos <- assign_coordinates(tree)
+n_leaves <- count_leaves(tree)
+canvas_width <- n_leaves + 2
+scale_x <- canvas_width / n_leaves
+
+plot(0, 0, type = "n",
+     xlim = c(0, canvas_width),
+     ylim = c(0, 1.05),
+     xlab = "", ylab = "", axes = FALSE,
+     main = "Fuzzy Regression Tree")
+
+plot_fuzzy_tree_positioned(tree_pos, scale_x = scale_x, dy = 0.12)
+
+
+
+# --- Step 7: Define prediction functions and predict for all observations ---
+
+predict_fuzzy_tree <- function(tree, new_data_point) {
+  if (tree$is_leaf) {
+    return(tree$prediction)
+  }
+  split_var <- tree$split_variable
+  split_val <- tree$split_value
+  if (new_data_point[[split_var]] <= split_val) {
+    return(predict_fuzzy_tree(tree$left, new_data_point))
+  } else {
+    return(predict_fuzzy_tree(tree$right, new_data_point))
+  }
+}
+
+predict_fuzzy_tree_dataset <- function(tree, data) {
+  predictions <- vector("list", nrow(data))
+  for (i in 1:nrow(data)) {
+    predictions[[i]] <- predict_fuzzy_tree(tree, data[i, , drop = FALSE])
+  }
+  return(predictions)
+}
+
+all_predictions <- predict_fuzzy_tree_dataset(tree, data)
+
+# --- Step 8: Convert predictions to matrix format ---
+fuzzy_preds <- do.call(rbind, all_predictions)
+colnames(fuzzy_preds) <- c("y_l", "y_c", "y_u")
+
+
+
+# --- Defuzzify predictions ---
+defuzzified_preds <- apply(fuzzy_preds, 1, function(row) {
+  a <- row[1]  # y_l
+  b <- row[2]  # y_c
+  c <- row[3]  # y_u
+  return((a + b + c) / 3)
+})
+
+# --- Error metrics for fuzzy tree ---
+MSE_defuzzified <- mean((data$Y - defuzzified_preds)^2)
+RMSE_defuzzified <- sqrt(MSE_defuzzified)
+MAE_defuzzified <- mean(abs(data$Y - defuzzified_preds))
+
+# --- Wrapper to compare tree models ---
+compare_simple_tree_models <- function(data) {
+  if (!requireNamespace("rpart", quietly = TRUE)) install.packages("rpart")
+  if (!requireNamespace("partykit", quietly = TRUE)) install.packages("partykit")
+  if (!requireNamespace("dplyr", quietly = TRUE)) install.packages("dplyr")
+  if (!requireNamespace("Metrics", quietly = TRUE)) install.packages("Metrics")
+  if (!requireNamespace("Cubist", quietly = TRUE)) install.packages("Cubist")
+  
+  library(rpart)
+  library(partykit)
+  library(dplyr)
+  library(Metrics)
+  library(randomForest)
+  library(gbm)
+  library(Cubist)
+  
+  target <- names(data)[ncol(data)]
+  predictors <- names(data)[-ncol(data)]
+  formula <- as.formula(paste(target, "~", paste(predictors, collapse = " + ")))
+  
+  cart_model <- rpart(formula, data = data)
+  cart_pred <- predict(cart_model, newdata = data)
+  
+  feature1 <- predictors[1]
+  data_bins <- data %>% mutate(bin = cut(.data[[feature1]], breaks = 4, include.lowest = TRUE))
+  m5_preds <- numeric(nrow(data_bins))
+  for (b in unique(data_bins$bin)) {
+    bin_data <- data_bins %>% filter(bin == b)
+    if (nrow(bin_data) >= 2) {
+      lm_model <- lm(formula, data = bin_data)
+      m5_preds[which(data_bins$bin == b)] <- predict(lm_model, newdata = bin_data)
+    }
+  }
+  
+  guide_model <- ctree(formula, data = data)
+  guide_pred <- predict(guide_model, newdata = data)
+  
+  cubist_model <- Cubist::cubist(x = data[, predictors], y = data[[target]])
+  cubist_pred <- predict(cubist_model, newdata = data[, predictors])
+  
+  y_true <- data[[target]]
+  
+  get_errors <- function(y, yhat) {
+    data.frame(
+      MSE = mse(y, yhat),
+      MAE = mae(y, yhat),
+      RMSE = rmse(y, yhat)
+    )
+  }
+  
+  results <- rbind(
+    cbind(Method = "CART", get_errors(y_true, cart_pred)),
+    cbind(Method = "M5-style (manual)", get_errors(y_true, m5_preds)),
+    cbind(Method = "GUIDE-style (ctree)", get_errors(y_true, guide_pred)),
+    cbind(Method = "Cubist", get_errors(y_true, cubist_pred))
+  )
+  
+  rownames(results) <- NULL
+ return(list(
+  results_table = results,
+  cart_pred = cart_pred,
+  m5_preds = m5_preds,
+  guide_pred = guide_pred,
+  cubist_pred = cubist_pred
+))
+  
+}
+
+fuzzy_results <- data.frame(
+  Method = "Fuzzy Tree (defuzzified)",
+  MSE = MSE_defuzzified,
+  MAE = MAE_defuzzified,
+  RMSE = RMSE_defuzzified
+)
+
+#tree_results <- compare_simple_tree_models(data)
+#all_results <- rbind(fuzzy_results, tree_results$results_table)
+
+#print(all_results)
+
+
+#library(ggplot2)
+#library(dplyr)
+#library(tidyr)
+
+#y_true <- data$Y
+
+# Combine predictions
+#df <- data.frame(
+#  True = y_true,
+#  CART = tree_results$cart_pred,
+#  `M5-style` = tree_results$m5_preds,
+#  `GUIDE-style` = tree_results$guide_pred,
+#  Cubist = tree_results$cubist_pred,
+#  `Fuzzy Tree` = defuzzified_preds
+#)
+
+# Long format for ggplot
+#df_long <- df %>%
+#  pivot_longer(-True, names_to = "Model", values_to = "Predicted")
+
+# Clear previous plot
+#graphics.off()
+
+# Faceted plot by model
+#ggplot(df_long, aes(x = True, y = Predicted)) +
+#  geom_point(color = "steelblue", size = 2, alpha = 0.8) +
+#  geom_abline(intercept = 0, slope = 1, linetype = "dashed", color = "black") +
+#  facet_wrap(~ Model) +
+#  labs(
+#    title = "Actual vs Predicted Y Values (Faceted by Model)",
+#    x = "True Y",
+#    y = "Predicted Y"
+#  ) +
+#  theme_minimal(base_size = 14) +
+#  theme(
+#    strip.text = element_text(size = 12),
+#    axis.text.x = element_text(angle = 45, hjust = 1)
+#  )
+
+
+
+
+####divide train-test ###
+library(rpart)
+library(partykit)
+library(Cubist)
+library(Metrics)
+library(dplyr)
+
+# --- Split helper ---
+split_data <- function(data, ratio = 0.8) {
+  set.seed(42)
+  n <- nrow(data)
+  train_index <- sample(1:n, size = floor(n * ratio))
+  list(
+    train = data[train_index, ],
+    test = data[-train_index, ]
+  )
+}
+
+# --- Your fuzzy tree wrapper ---
+
+data <- as.data.frame(data)
+your_fuzzy_tree_predict <- function(x, fuzzy_y_subset) {
+  tree <- build_fuzzy_tree(x, fuzzy_y_subset, random_TFNs_from_intervals)
+  fuzzy_preds_list <- predict_fuzzy_tree_dataset(tree, x)
+  fuzzy_preds <- do.call(rbind, fuzzy_preds_list)
+  colnames(fuzzy_preds) <- c("y_l", "y_c", "y_u")
+  defuzzified <- apply(fuzzy_preds, 1, function(row) mean(row))
+  return(defuzzified)
+}
+
+# --- Main comparison function ---
+compare_models_on_split <- function(data, fuzzy_y, split_ratio = 0.8) {
+  set.seed(42)
+  
+  data <- as.data.frame(data)
+  data$.id <- seq_len(nrow(data))
+  
+  target <- "Y"
+  predictors <- setdiff(names(data), c(target, ".id"))
+  formula <- as.formula(paste(target, "~", paste(predictors, collapse = " + ")))
+  
+  # Train/test split
+  n <- nrow(data)
+  train_index <- sample(n, floor(split_ratio * n))
+  train <- data[train_index, ]
+  test  <- data[-train_index, ]
+  
+  fuzzy_y_train <- fuzzy_y[train$.id, ]
+  fuzzy_y_test  <- fuzzy_y[test$.id, ]
+  
+  train_model <- train[, c(predictors, "Y")]
+  test_model  <- test[, c(predictors, "Y")]
+  
+  # Fit classical models
+  cart_model   <- rpart(formula, data = train_model)
+  guide_model  <- ctree(formula, data = train_model)
+  cubist_model <- cubist(train_model[, predictors], train_model$Y)
+  
+  # ✅ Fixed: include Y column in fuzzy tree data
+  fuzzy_pred_train <- your_fuzzy_tree_predict(train_model, fuzzy_y_train)
+  fuzzy_pred_test  <- your_fuzzy_tree_predict(test_model, fuzzy_y_test)
+  
+  preds <- list(
+    CART = list(train = predict(cart_model, train_model), test = predict(cart_model, test_model)),
+    GUIDE = list(train = predict(guide_model, newdata = train_model), test = predict(guide_model, newdata = test_model)),
+    Cubist = list(train = predict(cubist_model, newdata = train_model[, predictors]),
+                  test = predict(cubist_model, newdata = test_model[, predictors])),
+    FuzzyTree = list(train = fuzzy_pred_train, test = fuzzy_pred_test)
+  )
+  
+  y_train <- train_model$Y
+  y_test  <- test_model$Y
+  
+  results <- lapply(names(preds), function(method) {
+    data.frame(
+      Model = method,
+      Set   = c("Train", "Test"),
+      MAE   = c(mae(y_train, preds[[method]]$train), mae(y_test, preds[[method]]$test)),
+      MSE   = c(mse(y_train, preds[[method]]$train), mse(y_test, preds[[method]]$test)),
+      RMSE  = c(rmse(y_train, preds[[method]]$train), rmse(y_test, preds[[method]]$test))
+    )
+  })
+  
+  return(do.call(rbind, results))
+}
+
+
+
+
+
+#results <- compare_models_on_split(data, fuzzy_y, split_ratio = 0.8)
+#print(results)
+
+
+
+
+
+ratios <- c(0.8, 0.9, 0.95)
+
+all_results <- lapply(ratios, function(r) {
+  res <- compare_models_on_split(data, fuzzy_y, split_ratio = r)
+  res$SplitRatio <- paste0(r * 100, "/", (1 - r) * 100)
+  res
+})
+
+final_results <- bind_rows(all_results)
+#print(final_results)
+
+
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+
+# Step 1: Convert to long format for ggplot
+df_long <- final_results %>%
+  filter(Set == "Test") %>%  # Only plot test results
+  pivot_longer(cols = c(MSE, MAE, RMSE), names_to = "Metric", values_to = "Value")
+
+
+#### 02/04/25 draw line plot for all levels of ratio for test data.
+# --- NEW: Case-by-case prediction plot for each split ratio ---
+# --- Build prediction data across split ratios ---
+# --- Build combined prediction data (model + ratio = group) ---
+# Add row index to match rows in fuzzy_y
+data_with_id <- data %>%
+  mutate(.id = row_number())
+
+run_fuzzy_tree <- function(train_model, test_model, fuzzy_y_train, fuzzy_y_test, random_TFNs_from_intervals) {
+  # Build the fuzzy regression tree using training data
+  tree <- build_fuzzy_tree(train_model, fuzzy_y_train, random_TFNs_from_intervals)
+  
+  # Predict using the fuzzy tree on the test data
+  fuzzy_preds_list <- predict_fuzzy_tree_dataset(tree, test_model)
+  
+  # Return predictions as a vector (or matrix, if needed)
+  fuzzy_preds <- sapply(fuzzy_preds_list, mean)  # Assuming you're defuzzifying by averaging the fuzzy values
+  
+  return(fuzzy_preds)  # Return the predictions directly
+}
+
+split_prediction_data <- lapply(ratios, function(ratio) {
+  split <- split_data(data_with_id, ratio)
+  train <- split$train
+  test <- split$test
+  
+  fuzzy_y_train <- fuzzy_y[train$.id, ]
+  fuzzy_y_test <- fuzzy_y[test$.id, ]
+  
+  target <- names(data_with_id)[ncol(data_with_id) - 1]
+  predictors <- names(data_with_id)[!(names(data_with_id) %in% c(target, ".id"))]
+  formula <- as.formula(paste(target, "~", paste(predictors, collapse = " + ")))
+  
+  train_model <- train %>% select(-.id)
+  test_model <- test %>% select(-.id)
+  
+  cart_model <- rpart(formula, data = train_model)
+  guide_model <- ctree(formula, data = train_model)
+  cubist_model <- cubist(train_model[, predictors], train_model[[target]])
+  
+  # Run fuzzy tree prediction (this now returns a vector of predictions)
+  fuzzy_preds <- run_fuzzy_tree(train_model, test_model, fuzzy_y_train, fuzzy_y_test, random_TFNs_from_intervals)
+  
+  index <- 1:nrow(test_model)
+  y_test <- test_model[[target]]
+  ratio_label <- paste0(ratio * 100, "/", (1 - ratio) * 100)
+  
+  # Create long-format table for each model
+  model_preds <- data.frame(
+    Index = index,
+    Actual = y_test,
+    CART = as.numeric(predict(cart_model, test_model)),
+    GUIDE = as.numeric(predict(guide_model, test_model)),
+    Cubist = as.numeric(predict(cubist_model, test_model[, predictors])),
+    Fuzzy_Tree = fuzzy_preds  # Directly use fuzzy_preds without accessing $test
+  )
+  
+  # Pivot the data into long format
+  model_long <- model_preds %>%
+    pivot_longer(cols = -c(Index, Actual), names_to = "Model", values_to = "Predicted") %>%
+    mutate(SplitRatio = ratio_label,
+           Group = paste(Model, SplitRatio, sep = "_"))
+  
+  return(model_long)
+})
+
+
+  # --- Combine all predictions into one data frame ---
+combined_preds <- bind_rows(split_prediction_data)
+
+
+# Load necessary library
+library(dplyr)
+
+# Assuming `combined_preds` is your tibble with 700 rows
+# Create data frames for each model by filtering the data
+
+cart_df <- combined_preds %>% filter(Model == 'CART')
+guide_df <- combined_preds %>% filter(Model == 'GUIDE')
+cubist_df <- combined_preds %>% filter(Model == 'Cubist')
+fuzzy_tree_df <- combined_preds %>% filter(Model == 'Fuzzy_Tree')
+
+# View the data frames (you can print them or store them as needed)
+print(cart_df)
+print(guide_df)
+print(cubist_df)
+print(fuzzy_tree_df)
+
+# Load necessary libraries
+library(dplyr)
+library(ggplot2)
+
+# Calculate error for each data frame by adding a new column for error
+cart_df <- cart_df %>% mutate(Error = Actual - Predicted)
+guide_df <- guide_df %>% mutate(Error = Actual - Predicted)
+cubist_df <- cubist_df %>% mutate(Error = Actual - Predicted)
+fuzzy_tree_df <- fuzzy_tree_df %>% mutate(Error = Actual - Predicted)
+
+# Combine all data frames into one for easier plotting
+all_models_df <- bind_rows(
+  cart_df %>% mutate(Model = 'CART'),
+  guide_df %>% mutate(Model = 'GUIDE'),
+  cubist_df %>% mutate(Model = 'Cubist'),
+  fuzzy_tree_df %>% mutate(Model = 'Fuzzy_Tree')
+)
+
+library(stringr)
+# Calculate error for the cart_df
+cart_df <- cart_df %>% mutate(Error = Actual - Predicted)
+# Rename the Group values in the cart_df
+cart_df <- cart_df %>%
+  mutate(Group = str_replace(Group, "CART_80/20", "80/20"),
+         Group = str_replace(Group, "CART_90/10", "90/10"),
+         Group = str_replace(Group, "CART_95/5", "95/5"))
+
+# Create a box plot for the 'Error' values grouped by 'Group'
+plot_crt <- ggplot(cart_df, aes(x = Group, y = Error, fill = Group)) +
+  geom_boxplot() +
+  labs(title = 'CART Model', 
+       x = 'Splits', y = 'Error') +
+  theme_minimal() +
+  theme(legend.position = "none") +
+  scale_fill_manual(values = c("80/20" = "skyblue", "90/10" = "lightgreen", "95/5" = "lightcoral"))
+
+
+
+library(stringr)
+# Calculate error for the cart_df
+guide_df <- guide_df %>% mutate(Error = Actual - Predicted)
+# Rename the Group values in the cart_df
+guide_df <- guide_df %>%
+  mutate(Group = str_replace(Group, "GUIDE_80/20", "80/20"),
+         Group = str_replace(Group, "GUIDE_90/10", "90/10"),
+         Group = str_replace(Group, "GUIDE_95/5", "95/5"))
+
+# Create a box plot for the 'Error' values grouped by 'Group'
+plot_guide <- ggplot(guide_df, aes(x = Group, y = Error, fill = Group)) +
+  geom_boxplot() +
+  labs(title = 'GUIDE Model', 
+       x = 'Splits', y = 'Error') +
+  theme_minimal() +
+  theme(legend.position = "none") + 
+  scale_fill_manual(values = c("80/20" = "skyblue", "90/10" = "lightgreen", "95/5" = "lightcoral"))
+
+
+library(stringr)
+# Calculate error for the cart_df
+cubist_df <- cubist_df %>% mutate(Error = Actual - Predicted)
+# Rename the Group values in the cart_df
+cubist_df <- cubist_df %>%
+  mutate(Group = str_replace(Group, "Cubist_80/20", "80/20"),
+         Group = str_replace(Group, "Cubist_90/10", "90/10"),
+         Group = str_replace(Group, "Cubist_95/5", "95/5"))
+
+# Create a box plot for the 'Error' values grouped by 'Group'
+plot_cubist <- ggplot(cubist_df, aes(x = Group, y = Error, fill = Group)) +
+  geom_boxplot() +
+  labs(title = 'Cubist Model', 
+       x = 'Splits', y = 'Error') +
+  theme_minimal() +
+  theme(legend.position = "none") +
+  scale_fill_manual(values = c("80/20" = "skyblue", "90/10" = "lightgreen", "95/5" = "lightcoral"))
+
+
+library(stringr)
+# Calculate error for the cart_df
+fuzzy_tree_df <- fuzzy_tree_df %>% mutate(Error = Actual - Predicted)
+# Rename the Group values in the cart_df
+fuzzy_tree_df <- fuzzy_tree_df %>%
+  mutate(Group = str_replace(Group, "Fuzzy_Tree_80/20", "80/20"),
+         Group = str_replace(Group, "Fuzzy_Tree_90/10", "90/10"),
+         Group = str_replace(Group, "Fuzzy_Tree_95/5", "95/5"))
+
+# Create a box plot for the 'Error' values grouped by 'Group'
+plot_fuzzy_tree <- ggplot(fuzzy_tree_df, aes(x = Group, y = Error, fill = Group)) +
+  geom_boxplot() +
+  labs(title = 'Fuzz Tree Model', 
+       x = 'Splits', y = 'Error') +
+  theme_minimal() +
+  theme(legend.position = "none") +
+  scale_fill_manual(values = c("80/20" = "skyblue", "90/10" = "lightgreen", "95/5" = "lightcoral"))
+
+
+library(ggplot2)
+library(gridExtra)
+# Combine the plots in one layout (2 plots per row)
+sim_test_er_pot <- grid.arrange(plot_crt, plot_guide, plot_cubist, plot_fuzzy_tree, ncol = 4)
+
+# Save the arranged plot (sim_test_er_pot) to a file
+#ggsave("combined_plots.png", plot = sim_test_er_pot, width = 16, height = 8, units = "in", dpi = 300)
+
+
+
+# Define y-axis limits
+y_limits <- c(-10, 10)
+
+# Update each plot with fixed y-axis
+plot_crt <- plot_crt + coord_cartesian(ylim = y_limits)
+plot_guide <- plot_guide + coord_cartesian(ylim = y_limits)
+plot_cubist <- plot_cubist + coord_cartesian(ylim = y_limits)
+plot_fuzzy_tree <- plot_fuzzy_tree + coord_cartesian(ylim = y_limits)
+
+ # Combine the plots in one layout (4 in one row)
+library(gridExtra)
+sim_test_er_pot <- grid.arrange(plot_crt, plot_guide, plot_cubist, plot_fuzzy_tree, ncol = 4)
+
+# Save the arranged plot
+#ggsave("combined_plots.png", plot = sim_test_er_pot, width = 16, height = 8, units = "in", dpi = 300)
+
+
+
+
+
+
+
+
+# Select the columns 'SplitRatio' and 'Error' from cart_df and save as cart_split_error
+cart_split_error <- cart_df %>% select(SplitRatio, Error)
+guide_split_error <- guide_df %>% select(SplitRatio, Error)
+cubist_split_error <- cubist_df %>% select(SplitRatio, Error)
+fuzzy_split_error <- fuzzy_tree_df %>% select(SplitRatio, Error)
+
+
+
+# Filter the rows where SplitRatio and select the Error column
+cart_80_20_error <- cart_split_error %>% filter(SplitRatio == "80/20")
+cart_90_10_error <- cart_split_error %>% filter(SplitRatio == "90/10")
+cart_95_05_error <- cart_split_error %>% filter(SplitRatio == "95/5")
+
+
+# Filter the rows where SplitRatio and select the Error column
+guide_80_20_error <- guide_split_error %>% filter(SplitRatio == "80/20")
+guide_90_10_error <- guide_split_error %>% filter(SplitRatio == "90/10")
+guide_95_05_error <- guide_split_error %>% filter(SplitRatio == "95/5")
+
+# Filter the rows where SplitRatio and select the Error column
+cubist_80_20_error <- cubist_split_error %>% filter(SplitRatio == "80/20")
+cubist_90_10_error <- cubist_split_error %>% filter(SplitRatio == "90/10")
+cubist_95_05_error <- cubist_split_error %>% filter(SplitRatio == "95/5")
+
+# Filter the rows where SplitRatio and select the Error column
+fuzzy_80_20_error <- fuzzy_split_error %>% filter(SplitRatio == "80/20")
+fuzzy_90_10_error <- fuzzy_split_error %>% filter(SplitRatio == "90/10")
+fuzzy_95_05_error <- fuzzy_split_error %>% filter(SplitRatio == "95/5")
+
+# Load necessary library
+library(writexl)
+
+# Combine all the filtered data frames into a list
+data_to_save <- list(
+  `cart_80_20_Error` = cart_80_20_error,
+  `cart_90_10_Error` = cart_90_10_error,
+  `cart_95_5_Error` = cart_95_05_error,
+  
+  `guide_80_20_Error` = guide_80_20_error,
+  `guide_90_10_Error` = guide_90_10_error,
+  `guide_95_5_Error` = guide_95_05_error,
+  
+  `cubist_80_20_Error` = cubist_80_20_error,
+  `cubist_90_10_Error` = cubist_90_10_error,
+  `cubist_95_5_Error` = cubist_95_05_error,
+  
+  `fuzzy_80_20_Error` = fuzzy_80_20_error,
+  `fuzzy_90_10_Error` = fuzzy_90_10_error,
+  `fuzzy_95_5_Error` = fuzzy_95_05_error
+)
+
+# Save the data to an Excel file with different sheets
+write_xlsx(data_to_save, "split_error_results.xlsx")
+
