@@ -742,7 +742,7 @@ compare_models_on_split <- function(data, fuzzy_y, split_ratio = 0.8) {
   guide_model  <- ctree(formula, data = train_model)
   cubist_model <- cubist(train_model[, predictors], train_model$Y)
   
-  # ✅ Fixed: include Y column in fuzzy tree data
+  # include Y column in fuzzy tree data
   fuzzy_pred_train <- your_fuzzy_tree_predict(train_model, fuzzy_y_train)
   fuzzy_pred_test  <- your_fuzzy_tree_predict(test_model, fuzzy_y_test)
   
