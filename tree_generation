@@ -5,7 +5,7 @@ library(readxl)
 library(ggplot2)
 
 
-setwd("/Users/duyguicen/Desktop/sim_data_new/piecewise_outlier_data")
+setwd(" ")
 
 
 data <- read_excel("data_piecewise_n-500_out-0.00.xlsx")
